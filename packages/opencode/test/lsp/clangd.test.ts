@@ -19,15 +19,13 @@ describe("LSPServer.Clangd", () => {
   })
 
   describe("root detection", () => {
-    test("returns directory containing .clangd file (highest priority)", async () => {
+    test("returns directory containing .clangd file", async () => {
       // Create project structure:
       // tmpDir/
       //   .clangd
-      //   compile_flags.txt
       //   src/
       //     main.cpp
       await writeFile(path.join(tmpDir, ".clangd"), "")
-      await writeFile(path.join(tmpDir, "compile_flags.txt"), "-std=c++17")
       await mkdir(path.join(tmpDir, "src"))
       const cppFile = path.join(tmpDir, "src", "main.cpp")
       await writeFile(cppFile, "#include <iostream>")
@@ -40,7 +38,7 @@ describe("LSPServer.Clangd", () => {
       expect(root).toBe(tmpDir)
     })
 
-    test("returns directory containing compile_flags.txt when .clangd not found", async () => {
+    test("returns directory containing compile_flags.txt", async () => {
       // Create project structure:
       // tmpDir/
       //   compile_flags.txt
@@ -76,28 +74,30 @@ describe("LSPServer.Clangd", () => {
       expect(root).toBe(tmpDir)
     })
 
-    test("prefers .clangd over compile_flags.txt", async () => {
-      // Create project structure:
+    test("finds nearest config file in subdirectory (git subtree scenario)", async () => {
+      // Create project structure (git subtree scenario):
       // tmpDir/
-      //   compile_flags.txt
-      //   subproject/
-      //     .clangd
-      //     src/
-      //       main.cpp
+      //   compile_flags.txt  (project root)
+      //   libs/
+      //     mylib/           (git subtree)
+      //       .clangd        (subtree-specific config)
+      //       src/
+      //         lib.cpp
       await writeFile(path.join(tmpDir, "compile_flags.txt"), "-std=c++11")
-      const subproject = path.join(tmpDir, "subproject")
-      await mkdir(subproject)
-      await writeFile(path.join(subproject, ".clangd"), "")
-      await mkdir(path.join(subproject, "src"))
-      const cppFile = path.join(subproject, "src", "main.cpp")
-      await writeFile(cppFile, "#include <iostream>")
+      const subtree = path.join(tmpDir, "libs", "mylib")
+      await mkdir(subtree, { recursive: true })
+      await writeFile(path.join(subtree, ".clangd"), "")
+      await mkdir(path.join(subtree, "src"))
+      const cppFile = path.join(subtree, "src", "lib.cpp")
+      await writeFile(cppFile, "#include <vector>")
 
       const root = await Instance.provide({
         directory: tmpDir,
         fn: () => LSPServer.Clangd.root(cppFile),
       })
 
-      expect(root).toBe(subproject)
+      // Should find the nearest config file (.clangd in subtree)
+      expect(root).toBe(subtree)
     })
   })
 
