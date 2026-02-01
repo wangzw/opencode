@@ -946,12 +946,13 @@ export namespace LSPServer {
 
   export const Clangd: Info = {
     id: "clangd",
-    root: NearestRoot([".clangd"]),
+    // clangd automatically searches for .clangd, compile_flags.txt in all parent directories
+    root: async () => Instance.directory,
     extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
     async spawn(root) {
       const args = ["--background-index", "--clang-tidy"]
 
-      // Search for compile_commands.json at project root (handles git subtree scenarios)
+      // Search for compile_commands.json at project root, build subdirectories, or parent directories
       const compileCommandsDir = await findCompileCommandsDir(Instance.directory)
       if (compileCommandsDir) {
         args.push(`--compile-commands-dir=${compileCommandsDir}`)

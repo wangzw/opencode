@@ -19,12 +19,14 @@ describe("LSPServer.Clangd", () => {
   })
 
   describe("root detection", () => {
-    test("returns directory containing .clangd file", async () => {
+    test("always returns Instance.directory (clangd finds .clangd automatically)", async () => {
       // Create project structure:
       // tmpDir/
       //   .clangd
       //   src/
       //     main.cpp
+      // Note: clangd automatically searches for .clangd, compile_flags.txt
+      // in all parent directories of the active file
       await writeFile(path.join(tmpDir, ".clangd"), "")
       await mkdir(path.join(tmpDir, "src"))
       const cppFile = path.join(tmpDir, "src", "main.cpp")
@@ -36,51 +38,6 @@ describe("LSPServer.Clangd", () => {
       })
 
       expect(root).toBe(tmpDir)
-    })
-
-    test("returns Instance.directory as fallback when no .clangd file exists", async () => {
-      // Create project structure:
-      // tmpDir/
-      //   src/
-      //     main.cpp
-      // Note: compile_flags.txt is NOT used for root detection
-      // clangd will find it automatically from working directory or parent directories
-      await mkdir(path.join(tmpDir, "src"))
-      const cppFile = path.join(tmpDir, "src", "main.cpp")
-      await writeFile(cppFile, "#include <iostream>")
-
-      const root = await Instance.provide({
-        directory: tmpDir,
-        fn: () => LSPServer.Clangd.root(cppFile),
-      })
-
-      expect(root).toBe(tmpDir)
-    })
-
-    test("finds .clangd in subdirectory (git subtree scenario)", async () => {
-      // Create project structure (git subtree scenario):
-      // tmpDir/
-      //   .clangd              (project root)
-      //   libs/
-      //     mylib/             (git subtree)
-      //       .clangd          (subtree-specific config)
-      //       src/
-      //         lib.cpp
-      await writeFile(path.join(tmpDir, ".clangd"), "")
-      const subtree = path.join(tmpDir, "libs", "mylib")
-      await mkdir(subtree, { recursive: true })
-      await writeFile(path.join(subtree, ".clangd"), "")
-      await mkdir(path.join(subtree, "src"))
-      const cppFile = path.join(subtree, "src", "lib.cpp")
-      await writeFile(cppFile, "#include <vector>")
-
-      const root = await Instance.provide({
-        directory: tmpDir,
-        fn: () => LSPServer.Clangd.root(cppFile),
-      })
-
-      // Should find the nearest .clangd file (in subtree)
-      expect(root).toBe(subtree)
     })
   })
 
