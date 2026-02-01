@@ -890,12 +890,79 @@ export namespace LSPServer {
     },
   }
 
+  // Search for compile_commands.json in root, then first-level subdirectories, then upward
+  async function findCompileCommandsDir(root: string): Promise<string | undefined> {
+    // First, check in root directory
+    if (await pathExists(path.join(root, "compile_commands.json"))) {
+      return root
+    }
+
+    // Then check in first-level subdirectories (common build directories)
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const candidate = path.join(root, entry.name, "compile_commands.json")
+      if (await pathExists(candidate)) {
+        return path.join(root, entry.name)
+      }
+    }
+
+    // Search upward from root directory
+    const files = Filesystem.up({
+      targets: ["compile_commands.json"],
+      start: root,
+      stop: Instance.directory,
+    })
+    const first = await files.next()
+    await files.return()
+    if (first.value) {
+      return path.dirname(first.value)
+    }
+
+    return undefined
+  }
+
   export const Clangd: Info = {
     id: "clangd",
-    root: NearestRoot(["compile_commands.json", "compile_flags.txt", ".clangd", "CMakeLists.txt", "Makefile"]),
+    // Priority: .clangd first, then compile_flags.txt
+    root: async (file) => {
+      // First, search for .clangd
+      const clangdFiles = Filesystem.up({
+        targets: [".clangd"],
+        start: path.dirname(file),
+        stop: Instance.directory,
+      })
+      const clangdFirst = await clangdFiles.next()
+      await clangdFiles.return()
+      if (clangdFirst.value) {
+        return path.dirname(clangdFirst.value)
+      }
+
+      // Then, search for compile_flags.txt
+      const flagsFiles = Filesystem.up({
+        targets: ["compile_flags.txt"],
+        start: path.dirname(file),
+        stop: Instance.directory,
+      })
+      const flagsFirst = await flagsFiles.next()
+      await flagsFiles.return()
+      if (flagsFirst.value) {
+        return path.dirname(flagsFirst.value)
+      }
+
+      // Fall back to Instance.directory
+      return Instance.directory
+    },
     extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
     async spawn(root) {
       const args = ["--background-index", "--clang-tidy"]
+
+      // Search for compile_commands.json and add --compile-commands-dir if found
+      const compileCommandsDir = await findCompileCommandsDir(root)
+      if (compileCommandsDir) {
+        args.push("--compile-commands-dir=" + compileCommandsDir)
+      }
+
       const fromPath = Bun.which("clangd")
       if (fromPath) {
         return {
