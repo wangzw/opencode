@@ -1,0 +1,256 @@
+import { describe, expect, test, beforeEach, afterEach } from "bun:test"
+import os from "node:os"
+import path from "node:path"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { LSPServer } from "../../src/lsp/server"
+import { Instance } from "../../src/project/instance"
+import { Log } from "../../src/util/log"
+
+describe("LSPServer.Clangd", () => {
+  let tmpDir: string
+
+  beforeEach(async () => {
+    await Log.init({ print: true })
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "opencode-clangd-test-"))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  describe("root detection", () => {
+    test("returns directory containing .clangd file (highest priority)", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   .clangd
+      //   compile_flags.txt
+      //   src/
+      //     main.cpp
+      await writeFile(path.join(tmpDir, ".clangd"), "")
+      await writeFile(path.join(tmpDir, "compile_flags.txt"), "-std=c++17")
+      await mkdir(path.join(tmpDir, "src"))
+      const cppFile = path.join(tmpDir, "src", "main.cpp")
+      await writeFile(cppFile, "#include <iostream>")
+
+      const root = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.Clangd.root(cppFile),
+      })
+
+      expect(root).toBe(tmpDir)
+    })
+
+    test("returns directory containing compile_flags.txt when .clangd not found", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   compile_flags.txt
+      //   src/
+      //     main.cpp
+      await writeFile(path.join(tmpDir, "compile_flags.txt"), "-std=c++17")
+      await mkdir(path.join(tmpDir, "src"))
+      const cppFile = path.join(tmpDir, "src", "main.cpp")
+      await writeFile(cppFile, "#include <iostream>")
+
+      const root = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.Clangd.root(cppFile),
+      })
+
+      expect(root).toBe(tmpDir)
+    })
+
+    test("returns Instance.directory when neither .clangd nor compile_flags.txt found", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   src/
+      //     main.cpp
+      await mkdir(path.join(tmpDir, "src"))
+      const cppFile = path.join(tmpDir, "src", "main.cpp")
+      await writeFile(cppFile, "#include <iostream>")
+
+      const root = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.Clangd.root(cppFile),
+      })
+
+      expect(root).toBe(tmpDir)
+    })
+
+    test("prefers .clangd over compile_flags.txt", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   compile_flags.txt
+      //   subproject/
+      //     .clangd
+      //     src/
+      //       main.cpp
+      await writeFile(path.join(tmpDir, "compile_flags.txt"), "-std=c++11")
+      const subproject = path.join(tmpDir, "subproject")
+      await mkdir(subproject)
+      await writeFile(path.join(subproject, ".clangd"), "")
+      await mkdir(path.join(subproject, "src"))
+      const cppFile = path.join(subproject, "src", "main.cpp")
+      await writeFile(cppFile, "#include <iostream>")
+
+      const root = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.Clangd.root(cppFile),
+      })
+
+      expect(root).toBe(subproject)
+    })
+  })
+
+  describe("findCompileCommandsDir", () => {
+    test("finds compile_commands.json in CMake build directory (highest priority)", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   CMakeLists.txt
+      //   build/
+      //     CMakeCache.txt
+      //     compile_commands.json
+      //   compile_commands.json  (should NOT be used)
+      await writeFile(path.join(tmpDir, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.10)")
+      await writeFile(path.join(tmpDir, "compile_commands.json"), "[]")
+      const buildDir = path.join(tmpDir, "build")
+      await mkdir(buildDir)
+      await writeFile(path.join(buildDir, "CMakeCache.txt"), "")
+      await writeFile(path.join(buildDir, "compile_commands.json"), "[]")
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      expect(result).toBe(buildDir)
+    })
+
+    test("finds compile_commands.json in root directory when no CMake build", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   compile_commands.json
+      await writeFile(path.join(tmpDir, "compile_commands.json"), "[]")
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      expect(result).toBe(tmpDir)
+    })
+
+    test("finds compile_commands.json in first-level subdirectory", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   out/
+      //     compile_commands.json
+      const outDir = path.join(tmpDir, "out")
+      await mkdir(outDir)
+      await writeFile(path.join(outDir, "compile_commands.json"), "[]")
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      expect(result).toBe(outDir)
+    })
+
+    test("returns undefined when compile_commands.json not found", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   (empty)
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      expect(result).toBeUndefined()
+    })
+
+    test("prefers CMake build directory over root directory", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   compile_commands.json  (should NOT be used)
+      //   build-debug/
+      //     CMakeCache.txt
+      //     compile_commands.json  (should be used)
+      await writeFile(path.join(tmpDir, "compile_commands.json"), "[]")
+      const buildDir = path.join(tmpDir, "build-debug")
+      await mkdir(buildDir)
+      await writeFile(path.join(buildDir, "CMakeCache.txt"), "")
+      await writeFile(path.join(buildDir, "compile_commands.json"), "[]")
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      expect(result).toBe(buildDir)
+    })
+
+    test("finds compile_commands.json when multiple CMake build directories exist", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   build-debug/
+      //     CMakeCache.txt
+      //     compile_commands.json
+      //   build-release/
+      //     CMakeCache.txt
+      //     compile_commands.json
+      const debugDir = path.join(tmpDir, "build-debug")
+      const releaseDir = path.join(tmpDir, "build-release")
+      await mkdir(debugDir)
+      await mkdir(releaseDir)
+      await writeFile(path.join(debugDir, "CMakeCache.txt"), "")
+      await writeFile(path.join(debugDir, "compile_commands.json"), "[]")
+      await writeFile(path.join(releaseDir, "CMakeCache.txt"), "")
+      await writeFile(path.join(releaseDir, "compile_commands.json"), "[]")
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      // Should find one of the CMake build directories (order is filesystem-dependent)
+      expect([debugDir, releaseDir]).toContain(result)
+    })
+
+    test("skips CMake build directories without compile_commands.json", async () => {
+      // Create project structure:
+      // tmpDir/
+      //   compile_commands.json  (should be used as fallback)
+      //   build/
+      //     CMakeCache.txt
+      //     (no compile_commands.json)
+      await writeFile(path.join(tmpDir, "compile_commands.json"), "[]")
+      const buildDir = path.join(tmpDir, "build")
+      await mkdir(buildDir)
+      await writeFile(path.join(buildDir, "CMakeCache.txt"), "")
+
+      const result = await Instance.provide({
+        directory: tmpDir,
+        fn: () => LSPServer.findCompileCommandsDir(tmpDir),
+      })
+
+      expect(result).toBe(tmpDir)
+    })
+  })
+
+  describe("extensions", () => {
+    test("supports C/C++ file extensions", () => {
+      const extensions = LSPServer.Clangd.extensions
+      expect(extensions).toContain(".c")
+      expect(extensions).toContain(".cpp")
+      expect(extensions).toContain(".cc")
+      expect(extensions).toContain(".cxx")
+      expect(extensions).toContain(".c++")
+      expect(extensions).toContain(".h")
+      expect(extensions).toContain(".hpp")
+      expect(extensions).toContain(".hh")
+      expect(extensions).toContain(".hxx")
+      expect(extensions).toContain(".h++")
+    })
+  })
+})

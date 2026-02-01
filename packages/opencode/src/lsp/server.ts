@@ -890,9 +890,31 @@ export namespace LSPServer {
     },
   }
 
-  // Search for compile_commands.json in root, then first-level subdirectories, then upward
-  async function findCompileCommandsDir(root: string): Promise<string | undefined> {
-    // First, check in root directory
+  // Find CMake build directories by looking for CMakeCache.txt
+  async function findCMakeBuildDirs(root: string): Promise<string[]> {
+    const dirs: string[] = []
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const dir = path.join(root, entry.name)
+      if (await pathExists(path.join(dir, "CMakeCache.txt"))) {
+        dirs.push(dir)
+      }
+    }
+    return dirs
+  }
+
+  // Search for compile_commands.json in CMake build directories, then root, then first-level subdirectories, then upward
+  export async function findCompileCommandsDir(root: string): Promise<string | undefined> {
+    // First, check in CMake build directories (detected by CMakeCache.txt)
+    const cmakeDirs = await findCMakeBuildDirs(root)
+    for (const dir of cmakeDirs) {
+      if (await pathExists(path.join(dir, "compile_commands.json"))) {
+        return dir
+      }
+    }
+
+    // Then check in root directory
     if (await pathExists(path.join(root, "compile_commands.json"))) {
       return root
     }
