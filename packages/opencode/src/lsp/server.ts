@@ -960,7 +960,7 @@ export namespace LSPServer {
       // Search for compile_commands.json and add --compile-commands-dir if found
       const compileCommandsDir = await findCompileCommandsDir(root)
       if (compileCommandsDir) {
-        args.push("--compile-commands-dir=" + compileCommandsDir)
+        args.push(`--compile-commands-dir=${compileCommandsDir}`)
       }
 
       const fromPath = Bun.which("clangd")
