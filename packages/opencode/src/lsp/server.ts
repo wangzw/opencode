@@ -946,7 +946,7 @@ export namespace LSPServer {
 
   export const Clangd: Info = {
     id: "clangd",
-    root: NearestRoot(["compile_flags.txt", ".clangd"]),
+    root: NearestRoot([".clangd"]),
     extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
     async spawn(root) {
       const args = ["--background-index", "--clang-tidy"]
